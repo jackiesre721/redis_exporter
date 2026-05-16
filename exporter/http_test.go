@@ -13,7 +13,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -22,14 +21,14 @@ func TestHTTPScrapeMetricsEndpoints(t *testing.T) {
 		t.Skipf("Skipping TestHTTPScrapeMetricsEndpoints, missing env vars")
 	}
 
-	setupDBKeys(t, os.Getenv("TEST_REDIS_URI"))
-	defer deleteKeysFromDB(t, os.Getenv("TEST_REDIS_URI"))
-	setupDBKeys(t, os.Getenv("TEST_PWD_REDIS_URI"))
-	defer deleteKeysFromDB(t, os.Getenv("TEST_PWD_REDIS_URI"))
+	setupTestKeys(t, os.Getenv("TEST_REDIS_URI"))
+	defer deleteTestKeys(t, os.Getenv("TEST_REDIS_URI"))
+	setupTestKeys(t, os.Getenv("TEST_PWD_REDIS_URI"))
+	defer deleteTestKeys(t, os.Getenv("TEST_PWD_REDIS_URI"))
 
-	csk := dbNumStrFull + "=" + url.QueryEscape(keys[0]) // check-single-keys
-	css := dbNumStrFull + "=" + TestStreamName           // check-single-streams
-	cntk := dbNumStrFull + "=" + keys[0] + "*"           // count-keys
+	csk := dbNumStrFull + "=" + url.QueryEscape(testKeys[0]) // check-single-keys
+	css := dbNumStrFull + "=" + TestKeyNameStream            // check-single-streams
+	cntk := dbNumStrFull + "=" + testKeys[0] + "*"           // count-keys
 
 	u, err := url.Parse(os.Getenv("TEST_REDIS_URI"))
 	if err != nil {
@@ -101,7 +100,6 @@ func TestHTTPScrapeMetricsEndpoints(t *testing.T) {
 				LuaScript: map[string][]byte{
 					"test.lua": []byte(`return {"a", "11", "b", "12", "c", "13"}`),
 				},
-				Registry: prometheus.NewRegistry(),
 			}
 
 			options.CheckSingleKeys = tst.csk
@@ -173,10 +171,10 @@ func TestHTTPScrapeMetricsEndpoints(t *testing.T) {
 
 				`test_script_value`, // lua script
 
-				`test_key_size{db="db11",key="` + keys[0] + `"} 7`,
-				`test_key_value{db="db11",key="` + keys[0] + `"} 1234.56`,
+				`test_key_size{db="db11",key="` + testKeys[0] + `"} 7`,
+				`test_key_value{db="db11",key="` + testKeys[0] + `"} 1234.56`,
 
-				`test_keys_count{db="db11",key="` + keys[0] + `*"} 1`,
+				`test_keys_count{db="db11",key="` + testKeys[0] + `*"} 1`,
 
 				`test_db_keys{db="db11"} `,
 				`test_db_keys_expiring{db="db11"} `,
@@ -205,7 +203,6 @@ func TestHTTPScrapeMetricsEndpoints(t *testing.T) {
 
 func TestSimultaneousMetricsHttpRequests(t *testing.T) {
 	if os.Getenv("TEST_REDIS_URI") == "" ||
-		os.Getenv("TEST_REDIS_2_8_URI") == "" ||
 		os.Getenv("TEST_KEYDB01_URI") == "" ||
 		os.Getenv("TEST_KEYDB02_URI") == "" ||
 		os.Getenv("TEST_REDIS5_URI") == "" ||
@@ -213,20 +210,19 @@ func TestSimultaneousMetricsHttpRequests(t *testing.T) {
 		os.Getenv("TEST_REDIS_CLUSTER_MASTER_URI") == "" ||
 		os.Getenv("TEST_REDIS_CLUSTER_SLAVE_URI") == "" ||
 		os.Getenv("TEST_TILE38_URI") == "" ||
-		os.Getenv("TEST_REDIS_MODULES_URI") == "" {
+		os.Getenv("TEST_VALKEY8_BUNDLE_URI") == "" {
 		t.Skipf("Skipping TestSimultaneousMetricsHttpRequests, missing env vars")
 	}
 
-	setupDBKeys(t, os.Getenv("TEST_REDIS_URI"))
-	defer deleteKeysFromDB(t, os.Getenv("TEST_REDIS_URI"))
+	setupTestKeys(t, os.Getenv("TEST_REDIS_URI"))
+	defer deleteTestKeys(t, os.Getenv("TEST_REDIS_URI"))
 
-	e, _ := NewRedisExporter("", Options{Namespace: "test", InclSystemMetrics: false, Registry: prometheus.NewRegistry()})
+	e, _ := NewRedisExporter("", Options{Namespace: "test", InclSystemMetrics: false})
 	ts := httptest.NewServer(e)
 	defer ts.Close()
 
 	uris := []string{
 		os.Getenv("TEST_REDIS_URI"),
-		os.Getenv("TEST_REDIS_2_8_URI"),
 
 		os.Getenv("TEST_REDIS7_URI"),
 
@@ -238,9 +234,9 @@ func TestSimultaneousMetricsHttpRequests(t *testing.T) {
 
 		os.Getenv("TEST_REDIS5_URI"),
 		os.Getenv("TEST_REDIS6_URI"),
-		os.Getenv("TEST_REDIS_MODULES_URI"),
+		os.Getenv("TEST_VALKEY8_BUNDLE_URI"),
 
-		// tile38 & Cluster need to be last in this list so we can identify them when selected, down in line 229
+		// tile38 & Cluster need to be last in this list, so we can identify them when selected, down in line 229
 		os.Getenv("TEST_REDIS_CLUSTER_MASTER_URI"),
 		os.Getenv("TEST_REDIS_CLUSTER_SLAVE_URI"),
 		os.Getenv("TEST_TILE38_URI"),
@@ -262,9 +258,9 @@ func TestSimultaneousMetricsHttpRequests(t *testing.T) {
 				v.Add("target", target)
 
 				// not appending this param for Tile38 and cluster (the last two in the list)
-				// Tile38 & cluster don't support the SELECT command so this test will fail and spam the logs
+				// Tile38 & cluster don't support the SELECT command, so this test will fail and spam the logs
 				if uriIdx < len(uris)-3 {
-					v.Add("check-single-keys", dbNumStrFull+"="+url.QueryEscape(keys[0]))
+					v.Add("check-single-keys", dbNumStrFull+"="+url.QueryEscape(testKeys[0]))
 				}
 				up, _ := url.Parse(ts.URL + "/scrape")
 				up.RawQuery = v.Encode()
@@ -295,7 +291,7 @@ func TestHttpHandlers(t *testing.T) {
 		t.Skipf("TEST_PWD_REDIS_URI not set - skipping")
 	}
 
-	e, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test", Registry: prometheus.NewRegistry()})
+	e, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test"})
 	ts := httptest.NewServer(e)
 	defer ts.Close()
 
@@ -321,12 +317,83 @@ func TestHttpHandlers(t *testing.T) {
 	}
 }
 
+func TestHttpDiscoverClusterNodesHandlers(t *testing.T) {
+	clusterAddr := os.Getenv("TEST_REDIS_CLUSTER_MASTER_URI")
+	nonClusterAddr := os.Getenv("TEST_REDIS_URI")
+	if clusterAddr == "" || nonClusterAddr == "" {
+		t.Skipf("TEST_REDIS_CLUSTER_MASTER_URI or TEST_REDIS_URI not set - skipping")
+	}
+
+	tests := []struct {
+		addr      string
+		want      string
+		isCluster bool
+	}{
+		{
+			addr:      clusterAddr,
+			want:      "redis://127.0.0.1:7000",
+			isCluster: true,
+		},
+		{
+			addr:      clusterAddr,
+			want:      "redis://127.0.0.1:7001",
+			isCluster: true,
+		},
+		{
+			addr:      clusterAddr,
+			want:      "redis://127.0.0.1:7002",
+			isCluster: true,
+		},
+		{
+			addr:      clusterAddr,
+			want:      "The discovery endpoint is only available on a redis cluster",
+			isCluster: false,
+		},
+		{
+			addr:      nonClusterAddr,
+			want:      "The discovery endpoint is only available on a redis cluster",
+			isCluster: false,
+		},
+		{
+			addr:      nonClusterAddr,
+			want:      "ouldn't connect to redis cluster: cluster refresh failed",
+			isCluster: true,
+		},
+		{
+			addr:      "doesnt-exist:9876",
+			want:      "The discovery endpoint is only available on a redis cluster",
+			isCluster: false,
+		},
+		{
+			addr:      "doesnt-exist:9876",
+			want:      "Couldn't connect to redis cluster: cluster refresh failed: redisc: all nodes failed",
+			isCluster: true,
+		},
+	}
+
+	for _, tst := range tests {
+		t.Run(fmt.Sprintf("addr: %s, isCluster: %v", tst.addr, tst.isCluster), func(t *testing.T) {
+			e, _ := NewRedisExporter(tst.addr, Options{
+				Namespace: "test",
+				IsCluster: tst.isCluster,
+			})
+			ts := httptest.NewServer(e)
+			defer ts.Close()
+
+			body := downloadURL(t, ts.URL+"/discover-cluster-nodes")
+			if !strings.Contains(body, tst.want) {
+				t.Fatalf(`error, expected string "%s" in body, got body: \n\n%s`, tst.want, body)
+			}
+		})
+	}
+}
+
 func TestReloadHandlers(t *testing.T) {
 	if os.Getenv("TEST_PWD_REDIS_URI") == "" {
 		t.Skipf("TEST_PWD_REDIS_URI not set - skipping")
 	}
 
-	eWithPwdfile, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test", Registry: prometheus.NewRegistry(), RedisPwdFile: "../contrib/sample-pwd-file.json"})
+	eWithPwdfile, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test", RedisPwdFile: "../contrib/sample-pwd-file.json"})
 	ts := httptest.NewServer(eWithPwdfile)
 	defer ts.Close()
 
@@ -348,7 +415,7 @@ func TestReloadHandlers(t *testing.T) {
 		})
 	}
 
-	eWithnoPwdfile, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test", Registry: prometheus.NewRegistry()})
+	eWithnoPwdfile, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test"})
 	ts2 := httptest.NewServer(eWithnoPwdfile)
 	defer ts2.Close()
 
@@ -370,7 +437,7 @@ func TestReloadHandlers(t *testing.T) {
 		})
 	}
 
-	eWithMalformedPwdfile, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test", Registry: prometheus.NewRegistry(), RedisPwdFile: "../contrib/sample-pwd-file.json-malformed"})
+	eWithMalformedPwdfile, _ := NewRedisExporter(os.Getenv("TEST_PWD_REDIS_URI"), Options{Namespace: "test", RedisPwdFile: "../contrib/sample-pwd-file.json-malformed"})
 	ts3 := httptest.NewServer(eWithMalformedPwdfile)
 	defer ts3.Close()
 
@@ -442,14 +509,15 @@ func TestIsBasicAuthConfigured(t *testing.T) {
 
 func TestVerifyBasicAuth(t *testing.T) {
 	tests := []struct {
-		name          string
-		configUser    string
-		configPass    string
-		providedUser  string
-		providedPass  string
-		authHeaderSet bool
-		wantErr       bool
-		wantErrString string
+		name           string
+		configUser     string
+		configPass     string
+		configHashPass string
+		providedUser   string
+		providedPass   string
+		authHeaderSet  bool
+		wantErr        bool
+		wantErrString  string
 	}{
 		{
 			name:          "no auth configured - no credentials provided",
@@ -499,13 +567,43 @@ func TestVerifyBasicAuth(t *testing.T) {
 			wantErr:       true,
 			wantErrString: "Unauthorized",
 		},
+		{
+			name:           "auth configured with hash password - correct credentials",
+			configUser:     "user",
+			configHashPass: "$2b$12$slCbgjdTTCEZKRvp7fEd3exTXLqvq43kr3bZ6cGUfVLGJTC18SNJO",
+			providedUser:   "user",
+			providedPass:   "pass",
+			authHeaderSet:  true,
+			wantErr:        false,
+		},
+		{
+			name:           "auth configured with hash password - wrong username",
+			configUser:     "user",
+			configHashPass: "$2b$12$slCbgjdTTCEZKRvp7fEd3exTXLqvq43kr3bZ6cGUfVLGJTC18SNJO",
+			providedUser:   "wronguser",
+			providedPass:   "pass",
+			authHeaderSet:  true,
+			wantErr:        true,
+			wantErrString:  "Unauthorized",
+		},
+		{
+			name:           "auth configured with hash password - wrong password",
+			configUser:     "user",
+			configHashPass: "$2b$12$slCbgjdTTCEZKRvp7fEd3exTXLqvq43kr3bZ6cGUfVLGJTC18SNJO",
+			providedUser:   "user",
+			providedPass:   "wrongpass",
+			authHeaderSet:  true,
+			wantErr:        true,
+			wantErrString:  "Unauthorized",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e, _ := NewRedisExporter("", Options{
-				BasicAuthUsername: tt.configUser,
-				BasicAuthPassword: tt.configPass,
+				BasicAuthUsername:     tt.configUser,
+				BasicAuthPassword:     tt.configPass,
+				BasicAuthHashPassword: tt.configHashPass,
 			})
 
 			err := e.verifyBasicAuth(tt.providedUser, tt.providedPass, tt.authHeaderSet)
@@ -528,12 +626,13 @@ func TestBasicAuth(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		username       string
-		password       string
-		configUsername string
-		configPassword string
-		wantStatusCode int
+		name               string
+		username           string
+		password           string
+		configUsername     string
+		configPassword     string
+		configHashPassword string
+		wantStatusCode     int
 	}{
 		{
 			name:           "No auth configured - no credentials provided",
@@ -575,15 +674,47 @@ func TestBasicAuth(t *testing.T) {
 			configPassword: "testpass",
 			wantStatusCode: http.StatusUnauthorized,
 		},
+		{
+			name:               "Auth configured with hash password - correct credentials",
+			username:           "testuser",
+			password:           "testpass",
+			configUsername:     "testuser",
+			configHashPassword: "$2b$12$6LXQAFSyKb4lP67Zrk7rtOTyXhpomZZAQbRmvj90mCJ0Lgs3jTmhi",
+			wantStatusCode:     http.StatusOK,
+		},
+		{
+			name:               "Auth configured with hash password - wrong password",
+			username:           "testuser",
+			password:           "wrongpass",
+			configUsername:     "testuser",
+			configHashPassword: "$2b$12$6LXQAFSyKb4lP67Zrk7rtOTyXhpomZZAQbRmvj90mCJ0Lgs3jTmhi",
+			wantStatusCode:     http.StatusUnauthorized,
+		},
+		{
+			name:               "Auth configured with hash password - wrong username",
+			username:           "wronguser",
+			password:           "testpass",
+			configUsername:     "testuser",
+			configHashPassword: "$2b$12$6LXQAFSyKb4lP67Zrk7rtOTyXhpomZZAQbRmvj90mCJ0Lgs3jTmhi",
+			wantStatusCode:     http.StatusUnauthorized,
+		},
+		{
+			name:               "Auth configured with hash password - no credentials provided",
+			username:           "",
+			password:           "",
+			configUsername:     "testuser",
+			configHashPassword: "$2b$12$6LXQAFSyKb4lP67Zrk7rtOTyXhpomZZAQbRmvj90mCJ0Lgs3jTmhi",
+			wantStatusCode:     http.StatusUnauthorized,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e, _ := NewRedisExporter(os.Getenv("TEST_REDIS_URI"), Options{
-				Namespace:         "test",
-				Registry:          prometheus.NewRegistry(),
-				BasicAuthUsername: tt.configUsername,
-				BasicAuthPassword: tt.configPassword,
+				Namespace:             "test",
+				BasicAuthUsername:     tt.configUsername,
+				BasicAuthPassword:     tt.configPassword,
+				BasicAuthHashPassword: tt.configHashPassword,
 			})
 			ts := httptest.NewServer(e)
 			defer ts.Close()
@@ -645,4 +776,102 @@ func downloadURLWithStatusCode(t *testing.T, u string) (int, string) {
 	}
 
 	return resp.StatusCode, string(body)
+}
+
+func TestScrapeEndpointDisabled(t *testing.T) {
+	e, _ := NewRedisExporter("", Options{
+		Namespace:             "test",
+		DisableScrapeEndpoint: true,
+	})
+	ts := httptest.NewServer(e)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/scrape")
+	if err != nil {
+		t.Fatalf("Failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status code %d for disabled /scrape endpoint, got %d", http.StatusNotFound, resp.StatusCode)
+	}
+}
+
+func TestUnknownPathReturns404(t *testing.T) {
+	e, _ := NewRedisExporter("", Options{
+		Namespace: "test",
+	})
+	ts := httptest.NewServer(e)
+	defer ts.Close()
+
+	paths := []string{
+		"/nonexistent",
+		"/foo/bar",
+		"/metrics2",
+		"/scrape2",
+		"/admin",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + path)
+			if err != nil {
+				t.Fatalf("Failed to send request to %s: %v", path, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("Expected 404 for path %s, got %d", path, resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestValidateBasicAuthPassword(t *testing.T) {
+	tests := []struct {
+		name               string
+		configHashPassword string
+		configPassword     string
+		inputPassword      string
+		expectStatus       bool
+	}{
+		{
+			name:           "Valid password",
+			configPassword: "password",
+			inputPassword:  "password",
+			expectStatus:   true,
+		}, {
+			name:           "Invalid password",
+			configPassword: "password",
+			inputPassword:  "wrongpassword",
+			expectStatus:   false,
+		},
+		{
+			name:               "Valid  hash password",
+			configHashPassword: "$2b$12$ODSJd0tmxY7H/adgD7R5SO43d8nmhUsa8OM6Weo7VFs3MbrsEY7tu",
+			inputPassword:      "password",
+			expectStatus:       true,
+		},
+		{
+			name:               "Invalid bcrypt hash",
+			configHashPassword: "$2b$12$ODSJd0tmxY7H/adgD7R5SO43d8nmhUsa8OM6Weo7VFs3MbrsEY7tu",
+			inputPassword:      "wrongpassword",
+			expectStatus:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Exporter{
+				options: Options{
+					BasicAuthHashPassword: tt.configHashPassword,
+					BasicAuthPassword:     tt.configPassword,
+				},
+			}
+			st := e.validateBasicAuthPassword(tt.inputPassword)
+			if st != tt.expectStatus {
+				t.Errorf("Expected error: %v, got: %v", tt.expectStatus, st)
+			}
+		})
+	}
 }

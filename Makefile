@@ -34,25 +34,25 @@ test-certs:
 
 .PHONY: test
 test:
+	TEST_REDIS_URI="redis://localhost:6379" \
 	TEST_VALKEY7_URI="valkey://localhost:16384" \
 	TEST_VALKEY8_URI="valkey://localhost:16382" \
+	TEST_VALKEY8_BUNDLE_URI="valkey://localhost:16389" \
 	TEST_VALKEY8_TLS_URI="valkeys://localhost:16386" \
 	TEST_REDIS7_TLS_URI="rediss://localhost:16387" \
-	TEST_REDIS_URI="redis://localhost:16385" \
+	TEST_REDIS8_URI="redis://localhost:16388" \
 	TEST_REDIS7_URI="redis://localhost:16385" \
 	TEST_REDIS5_URI="redis://localhost:16383" \
 	TEST_REDIS6_URI="redis://localhost:16379" \
-	TEST_REDIS_2_8_URI="redis://localhost:16381" \
 	TEST_KEYDB01_URI="redis://localhost:16401" \
 	TEST_KEYDB02_URI="redis://localhost:16402" \
 	TEST_PWD_REDIS_URI="redis://:redis-password@localhost:16380" \
 	TEST_USER_PWD_REDIS_URI="redis://exporter:exporter-password@localhost:16390" \
 	TEST_REDIS_CLUSTER_MASTER_URI="redis://localhost:17000" \
 	TEST_REDIS_CLUSTER_SLAVE_URI="redis://localhost:17005" \
-	TEST_REDIS_CLUSTER_PASSWORD_URI="redis://localhost:17006" \
+	TEST_VALKEY_CLUSTER_PASSWORD_URI="redis://localhost:17006" \
 	TEST_TILE38_URI="redis://localhost:19851" \
-	TEST_REDIS_SENTINEL_URI="redis://localhost:26379" \
-	TEST_REDIS_MODULES_URI="redis://localhost:36379" \
+	TEST_VALKEY_SENTINEL_URI="redis://localhost:26379" \
 	go test -v -covermode=atomic -cover -race -coverprofile=coverage.txt -p 1 ./...
 
 .PHONY: lint
@@ -81,7 +81,7 @@ BUILD_DT:=$(shell date +%F-%T)
 GO_LDFLAGS:="-s -w -extldflags \"-static\" -X main.BuildVersion=${GITHUB_REF_NAME} -X main.BuildCommitSha=${GITHUB_SHA} -X main.BuildDate=$(BUILD_DT)"
 
 
-.PHONE: build-some-amd64-binaries
+.PHONY: build-some-amd64-binaries
 build-some-amd64-binaries:
 	go install github.com/oliver006/gox@master
 
@@ -91,7 +91,7 @@ build-some-amd64-binaries:
 	gox -os="linux windows" -arch="amd64" -verbose -rebuild -ldflags $(GO_LDFLAGS) -output ".build/redis_exporter-${GITHUB_REF_NAME}.{{.OS}}-{{.Arch}}/{{.Dir}}" && echo "done"
 
 
-.PHONE: build-all-binaries
+.PHONY: build-all-binaries
 build-all-binaries:
 	go install github.com/oliver006/gox@master
 

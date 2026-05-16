@@ -21,22 +21,55 @@ func TestSanitizeMetricName(t *testing.T) {
 }
 
 func TestRegisterConstHistogram(t *testing.T) {
-	exp := getTestExporter()
-
 	metricName := "foo"
+	for _, inc := range []bool{false, true} {
+		exp := getTestExporterWithOptions(Options{Namespace: "test", AppendInstanceRoleLabel: inc})
+		ch := make(chan prometheus.Metric)
+		go func() {
+			exp.createMetricDescription(metricName, []string{"test"})
+			exp.registerConstHistogram(ch, metricName, 12, .24, map[float64]uint64{}, "test")
+			close(ch)
+		}()
 
-	ch := make(chan prometheus.Metric)
-	go func() {
-		exp.registerConstHistogram(ch, metricName, []string{"bar"}, 12, .24, map[float64]uint64{}, "test")
-		close(ch)
-	}()
-
-	for m := range ch {
-		if strings.Contains(m.Desc().String(), metricName) {
-			return
+		for m := range ch {
+			if strings.Contains(m.Desc().String(), metricName) {
+				if inc && !strings.Contains(m.Desc().String(), "instance_role") {
+					t.Errorf("want metrics to include instance_role label, have:\n%s", m.Desc().String())
+				}
+				if !inc && strings.Contains(m.Desc().String(), "instance_role") {
+					t.Errorf("did NOT want metrics to include instance_role label, have:\n%s", m.Desc().String())
+				}
+				continue
+			}
+			t.Errorf("Histogram was not registered")
 		}
 	}
-	t.Errorf("Histogram was not registered")
+}
+
+func TestRegisterConstMetric(t *testing.T) {
+	metricName := "bar"
+	for _, inc := range []bool{false, true} {
+		exp := getTestExporterWithOptions(Options{Namespace: "test", AppendInstanceRoleLabel: inc})
+		ch := make(chan prometheus.Metric)
+		go func() {
+			exp.createMetricDescription(metricName, []string{"test"})
+			exp.registerConstMetric(ch, metricName, 4.2, prometheus.GaugeValue, "test")
+			close(ch)
+		}()
+
+		for m := range ch {
+			if strings.Contains(m.Desc().String(), metricName) {
+				if inc && !strings.Contains(m.Desc().String(), "instance_role") {
+					t.Errorf("want metrics to include instance_role label, have:\n%s", m.Desc().String())
+				}
+				if !inc && strings.Contains(m.Desc().String(), "instance_role") {
+					t.Errorf("did NOT want metrics to include instance_role label, have:\n%s", m.Desc().String())
+				}
+				continue
+			}
+			t.Errorf("ConstMetric was not registered")
+		}
+	}
 }
 
 func TestFindOrCreateMetricsDescriptionFindExisting(t *testing.T) {
@@ -46,8 +79,8 @@ func TestFindOrCreateMetricsDescriptionFindExisting(t *testing.T) {
 	metricName := "foo"
 	labels := []string{"1", "2"}
 
-	ret := exp.findOrCreateMetricDescription(metricName, labels)
-	ret2 := exp.findOrCreateMetricDescription(metricName, labels)
+	ret := exp.createMetricDescription(metricName, labels)
+	ret2 := exp.createMetricDescription(metricName, labels)
 
 	if ret == nil || ret2 == nil || ret != ret2 {
 		t.Errorf("Unexpected return values: (%v, %v)", ret, ret2)
@@ -65,7 +98,7 @@ func TestFindOrCreateMetricsDescriptionCreateNew(t *testing.T) {
 	metricName := "foo"
 	labels := []string{"1", "2"}
 
-	ret := exp.findOrCreateMetricDescription(metricName, labels)
+	ret := exp.createMetricDescription(metricName, labels)
 
 	if ret == nil {
 		t.Errorf("Unexpected return value: %s", ret)

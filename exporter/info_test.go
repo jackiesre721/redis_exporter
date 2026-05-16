@@ -31,10 +31,16 @@ func TestKeyspaceStringParser(t *testing.T) {
 		{db: "db3", stats: "keys=123,expires=0,avg_ttl=zzz", ok: false},
 		{db: "db3", stats: "keys=1,expires=0,avg_ttl=zzz,cached_keys=0", ok: false},
 		{db: "db3", stats: "keys=1,expires=0,avg_ttl=0,cached_keys=zzz", ok: false},
-		{db: "db3", stats: "keys=1,expires=0,avg_ttl=0,cached_keys=0,extra=0", ok: false},
+		{db: "db3", stats: "keys=1,expires=0,avg_ttl=0,cached_keys=0,extra=0", keysTotal: 1, keysEx: 0, avgTTL: 0, keysCached: 0, ok: true},
 
 		{db: "db0", stats: "keys=1,expires=0,avg_ttl=0", keysTotal: 1, keysEx: 0, avgTTL: 0, keysCached: -1, ok: true},
 		{db: "db0", stats: "keys=1,expires=0,avg_ttl=0,cached_keys=0", keysTotal: 1, keysEx: 0, avgTTL: 0, keysCached: 0, ok: true},
+
+		{
+			db: "db0", stats: "keys=25714011,expires=25091314,avg_ttl=685620459,subexpiry=0",
+			keysTotal: 25714011, keysEx: 25091314, keysCached: 0, avgTTL: 685620.459000,
+			ok: true,
+		},
 	}
 
 	for _, tst := range tsts {
@@ -46,7 +52,12 @@ func TestKeyspaceStringParser(t *testing.T) {
 			}
 
 			if ok && (kt != tst.keysTotal || kx != tst.keysEx || kc != tst.keysCached || ttl != tst.avgTTL) {
-				t.Errorf("values not matching, db:%s stats:%s   %f %f %f %f", tst.db, tst.stats, kt, kx, kc, ttl)
+				t.Errorf("values not matching, db:%s stats:%s   %f != %f   %f != %f  %f != %f  %f != %f",
+					tst.db, tst.stats,
+					kt, tst.keysTotal,
+					kx, tst.keysEx,
+					kc, tst.keysCached,
+					ttl, tst.avgTTL)
 			}
 		}
 	}
@@ -92,21 +103,21 @@ func TestParseConnectedSlaveString(t *testing.T) {
 func TestCommandStats(t *testing.T) {
 	defaultAddr := os.Getenv("TEST_REDIS_URI")
 	e := getTestExporterWithAddr(defaultAddr)
-	setupDBKeys(t, defaultAddr)
+	setupTestKeys(t, defaultAddr)
 
 	want := map[string]bool{"test_commands_duration_seconds_total": false, "test_commands_total": false}
 	commandStatsCheck(t, e, want)
-	deleteKeysFromDB(t, defaultAddr)
+	deleteTestKeys(t, defaultAddr)
 
 	redisSixTwoAddr := os.Getenv("TEST_REDIS6_URI")
 	if redisSixTwoAddr != "" {
 		// Since Redis v6.2 we should expect extra failed calls and rejected calls
 		e = getTestExporterWithAddr(redisSixTwoAddr)
-		setupDBKeys(t, redisSixTwoAddr)
+		setupTestKeys(t, redisSixTwoAddr)
 
 		want = map[string]bool{"test_commands_duration_seconds_total": false, "test_commands_total": false, "commands_failed_calls_total": false, "commands_rejected_calls_total": false, "errors_total": false}
 		commandStatsCheck(t, e, want)
-		deleteKeysFromDB(t, redisSixTwoAddr)
+		deleteTestKeys(t, redisSixTwoAddr)
 	}
 }
 
@@ -131,21 +142,45 @@ func commandStatsCheck(t *testing.T, e *Exporter, want map[string]bool) {
 	}
 }
 
+func TestInclMetricsForEmptyDatabases(t *testing.T) {
+	addr := os.Getenv("TEST_REDIS_URI")
+	if addr == "" {
+		t.Skipf("TEST_REDIS_URI not set - skipping")
+	}
+
+	for _, inclMetrics := range []bool{true, false} {
+		t.Run(fmt.Sprintf("inclMetrics:%t", inclMetrics), func(t *testing.T) {
+			e, _ := NewRedisExporter(addr,
+				Options{
+					Namespace:                    "test",
+					InclMetricsForEmptyDatabases: inclMetrics,
+				})
+			ts := httptest.NewServer(e)
+			defer ts.Close()
+
+			body := downloadURL(t, ts.URL+"/metrics")
+			if inclMetrics {
+				if !strings.Contains(body, `test_db_keys{db="db10"} 0`) {
+					t.Errorf("Expected to find test_db_keys")
+				}
+			} else {
+				if strings.Contains(body, `test_db_keys{db="db10"} 0`) {
+					t.Errorf("Expected to not find test_db_keys")
+				}
+			}
+		})
+	}
+}
+
 func TestClusterMaster(t *testing.T) {
 	if os.Getenv("TEST_REDIS_CLUSTER_MASTER_URI") == "" {
 		t.Skipf("TEST_REDIS_CLUSTER_MASTER_URI not set - skipping")
 	}
 
 	addr := os.Getenv("TEST_REDIS_CLUSTER_MASTER_URI")
-	e, _ := NewRedisExporter(addr, Options{Namespace: "test", Registry: prometheus.NewRegistry()})
+	e, _ := NewRedisExporter(addr, Options{Namespace: "test"})
 	ts := httptest.NewServer(e)
 	defer ts.Close()
-
-	chM := make(chan prometheus.Metric, 10000)
-	go func() {
-		e.Collect(chM)
-		close(chM)
-	}()
 
 	body := downloadURL(t, ts.URL+"/metrics")
 	log.Debugf("master - body: %s", body)
@@ -159,21 +194,62 @@ func TestClusterMaster(t *testing.T) {
 	}
 }
 
+func TestClusterSkipCheckKeysIfMaster(t *testing.T) {
+	uriMaster := os.Getenv("TEST_REDIS_CLUSTER_MASTER_URI")
+	uriSlave := os.Getenv("TEST_REDIS_CLUSTER_SLAVE_URI")
+	if uriMaster == "" || uriSlave == "" {
+		t.Skipf("TEST_REDIS_CLUSTER_MASTER_URI or slave not set - skipping")
+	}
+
+	setupTestKeysCluster(t, uriMaster)
+	defer deleteTestKeysCluster(t, uriMaster)
+
+	for _, uri := range []string{uriMaster, uriSlave} {
+		for _, skip := range []bool{true, false} {
+			e, _ := NewRedisExporter(
+				uri,
+				Options{Namespace: "test",
+					CheckKeys:                  TestKeyNameHll,
+					SkipCheckKeysForRoleMaster: skip,
+					IsCluster:                  true,
+				})
+			ts := httptest.NewServer(e)
+
+			body := downloadURL(t, ts.URL+"/metrics")
+
+			expectedMetricPresent := true
+			if skip && uri == uriMaster {
+				expectedMetricPresent = false
+			}
+			t.Logf("skip: %#v  uri: %s    uri == uriMaster: %#v", skip, uri, uri == uriMaster)
+			t.Logf("expectedMetricPresent: %#v", expectedMetricPresent)
+
+			want := `test_key_size{db="db0",key="test-hll"} 3`
+
+			if expectedMetricPresent {
+				if !strings.Contains(body, want) {
+					t.Fatalf("expectedMetricPresent but missing. metric: %s   body: %s\n", want, body)
+				}
+			} else {
+				if strings.Contains(body, want) {
+					t.Fatalf("should have skipped it but found it, body:\n%s", body)
+				}
+			}
+
+			ts.Close()
+		}
+	}
+}
+
 func TestClusterSlave(t *testing.T) {
 	if os.Getenv("TEST_REDIS_CLUSTER_SLAVE_URI") == "" {
 		t.Skipf("TEST_REDIS_CLUSTER_SLAVE_URI not set - skipping")
 	}
 
 	addr := os.Getenv("TEST_REDIS_CLUSTER_SLAVE_URI")
-	e, _ := NewRedisExporter(addr, Options{Namespace: "test", Registry: prometheus.NewRegistry()})
+	e, _ := NewRedisExporter(addr, Options{Namespace: "test"})
 	ts := httptest.NewServer(e)
 	defer ts.Close()
-
-	chM := make(chan prometheus.Metric, 10000)
-	go func() {
-		e.Collect(chM)
-		close(chM)
-	}()
 
 	body := downloadURL(t, ts.URL+"/metrics")
 	log.Debugf("slave - body: %s", body)
